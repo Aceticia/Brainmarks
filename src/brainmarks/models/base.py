@@ -14,6 +14,14 @@ class Embeddings(NamedTuple):
     patch_embeds: Tensor | None
     """patch embeddings [B L D]"""
 
+    patch_mask: Tensor | None = None
+    """padding mask for patch_embeds [B L], bool, True = padded. None = no padding."""
+
+
+def as_embeddings(out: "Embeddings | tuple") -> "Embeddings":
+    """Normalize a wrapper return (Embeddings or bare tuple) to an Embeddings."""
+    return out if isinstance(out, Embeddings) else Embeddings(*out)
+
 
 class ModelWrapper(nn.Module):
     """

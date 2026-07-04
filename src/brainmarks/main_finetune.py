@@ -26,9 +26,10 @@ from peft import LoraConfig, get_peft_model
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 import brainmarks.utils as ut
-from brainmarks.classifiers import create_classifier, list_classififiers
+from brainmarks.classifiers import create_classifier, filter_kwargs, list_classififiers
 from brainmarks.datasets.base import HFDataset
 from brainmarks.datasets.registry import create_dataset, list_datasets
+from brainmarks.models.base import as_embeddings
 from brainmarks.models.registry import create_model, list_models
 
 DEFAULT_CONFIG = Path(__file__).parent / "config/default_finetune.yaml"
@@ -322,10 +323,11 @@ class FineTuneModel(nn.Module):
         self.classifier = classifier
 
     def forward(self, batch):
-        cls_embeds, reg_embeds, patch_embeds = self.backbone(batch)
-        all_embeds = {"cls": cls_embeds, "reg": reg_embeds, "patch": patch_embeds}
+        out = as_embeddings(self.backbone(batch))
+        all_embeds = {"cls": out.cls_embeds, "reg": out.reg_embeds, "patch": out.patch_embeds}
         embeds = all_embeds[self.representation]
-        return self.classifier(embeds)
+        mask = out.patch_mask if self.representation == "patch" else None
+        return self.classifier(embeds, **filter_kwargs(self.classifier.forward, {"mask": mask}))
 
 
 @torch.inference_mode()
@@ -339,8 +341,8 @@ def get_embedding_dim(
     example_batch = next(iter(loader))
     example_batch = ut.send_data(example_batch, device)
 
-    cls_embeds, reg_embeds, patch_embeds = backbone(example_batch)
-    all_embeds = {"cls": cls_embeds, "reg": reg_embeds, "patch": patch_embeds}
+    out = as_embeddings(backbone(example_batch))
+    all_embeds = {"cls": out.cls_embeds, "reg": out.reg_embeds, "patch": out.patch_embeds}
     embeds = all_embeds[args.representation]
     embed_dim = embeds.shape[-1]
     return embed_dim

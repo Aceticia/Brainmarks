@@ -37,7 +37,7 @@ def test_model(name: str, n_samples: int):
 
     batch = default_collate(batch)
 
-    cls_embeds, reg_embeds, patch_embeds = model(batch)
+    cls_embeds, reg_embeds, patch_embeds, *_ = model(batch)
     if cls_embeds is not None:
         assert cls_embeds.ndim == 3
         assert cls_embeds.shape[:2] == (batch_size, 1)

@@ -24,8 +24,10 @@ from torch.utils.data import DataLoader
 
 import brainmarks.utils as ut
 import brainmarks.version
+from brainmarks.classifiers import masked_mean
 from brainmarks.datasets.base import HFDataset
 from brainmarks.datasets.registry import create_dataset, list_datasets
+from brainmarks.models.base import as_embeddings
 from brainmarks.models.registry import create_model, list_models
 
 DEFAULT_CONFIG = Path(__file__).parent / "config/default_logistic.yaml"
@@ -293,14 +295,15 @@ def extract_features(
             target = batch.pop("target")
 
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=args.amp):
-                cls_embeds, reg_embeds, patch_embeds = backbone(batch)
+                out = as_embeddings(backbone(batch))
 
-            all_embeds = {"cls": cls_embeds, "reg": reg_embeds, "patch": patch_embeds}
+            all_embeds = {"cls": out.cls_embeds, "reg": out.reg_embeds, "patch": out.patch_embeds}
             embeds = all_embeds[args.representation]
+            mask = out.patch_mask if args.representation == "patch" else None
 
             # average over sequence dimension: (n, l, d) -> (n, d)
             if embeds.ndim == 3:
-                embeds = embeds.mean(dim=1)
+                embeds = masked_mean(embeds, mask)
 
             all_features.append(embeds.cpu().float().numpy())
             all_targets.append(target.cpu().numpy())

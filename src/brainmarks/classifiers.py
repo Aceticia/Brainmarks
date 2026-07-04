@@ -8,6 +8,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from brainmarks.models.base import as_embeddings
+
+
+def masked_mean(x: Tensor, mask: Tensor | None) -> Tensor:
+    """Mean over dim 1, excluding positions where mask ([B, L] bool) is True."""
+    if mask is None:
+        return x.mean(dim=1)
+    keep = (~mask).unsqueeze(-1).to(x.dtype)  # [B, L, 1]
+    return (x * keep).sum(dim=1) / keep.sum(dim=1).clamp(min=1.0)
+
 
 # backbone classification wrappers adapted from capi
 
@@ -29,12 +39,16 @@ class ClassifierGrid(nn.Module):
         self.classifiers = nn.ModuleList(list(classifiers.values()))
 
     def forward(self, *args, **kwargs) -> Tensor:
-        cls_embeds, reg_embeds, patch_embeds = self.backbone(*args, **kwargs)
-        all_embeds = {"cls": cls_embeds, "reg": reg_embeds, "patch": patch_embeds}
+        out = as_embeddings(self.backbone(*args, **kwargs))
+        all_embeds = {"cls": out.cls_embeds, "reg": out.reg_embeds, "patch": out.patch_embeds}
         embeds = all_embeds[self.representation]
+        mask = out.patch_mask if self.representation == "patch" else None
 
         # [B, num_classes, num_classifiers]
-        all_logit = torch.stack([clf(embeds) for clf in self.classifiers], dim=-1)
+        all_logit = torch.stack(
+            [clf(embeds, **filter_kwargs(clf.forward, {"mask": mask})) for clf in self.classifiers],
+            dim=-1,
+        )
         return all_logit
 
 
@@ -53,10 +67,10 @@ class LinearClassifier(nn.Module):
             nn.init.trunc_normal_(self.linear.weight, std=0.02)
         nn.init.zeros_(self.linear.bias)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, mask: Tensor | None = None):
         assert x.ndim in {2, 3}, "linear classifier only accepts 2D or 3D inputs"
         if x.ndim == 3:
-            x = x.mean(dim=1)
+            x = masked_mean(x, mask)
         x = self.linear(x)
         return x
 
@@ -80,7 +94,7 @@ class AttnPoolClassifier(nn.Module):
         nn.init.trunc_normal_(self.linear.weight, std=0.02)
         nn.init.zeros_(self.linear.bias)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, mask: Tensor | None = None):
         assert x.ndim == 3, "attn classifier only accepts 3D inputs"
         B, N, _ = x.shape
         D = self.embed_dim
@@ -94,7 +108,13 @@ class AttnPoolClassifier(nn.Module):
         kv = kv.permute(2, 0, 3, 1, 4)  # [2, B, head, N, D_head]
         k, v = torch.unbind(kv, dim=0)  # 2 * [B, head, N, D_head]
 
-        x = F.scaled_dot_product_attention(q, k, v)  # [B, head, 1, D_head]
+        attn_mask = None
+        if mask is not None:
+            assert mask.shape == (B, N)
+            # SDPA boolean mask uses True = attend, so invert the padding mask
+            attn_mask = (~mask)[:, None, None, :]  # [B, 1, 1, N]
+
+        x = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)  # [B, head, 1, D_head]
         x = x.reshape(B, D)  # [B, D]
         x = self.linear(x)
         return x
@@ -124,7 +144,7 @@ class MLPClassifier(nn.Module):
         nn.init.trunc_normal_(self.fc2.weight, std=0.02)
         nn.init.zeros_(self.fc2.bias)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
         assert x.ndim in {2, 3}, "mlp classifier only accepts 2D or 3D inputs"
         x = self.fc1(x)
         x = self.act(x)
@@ -132,7 +152,7 @@ class MLPClassifier(nn.Module):
         x = self.norm(x)
         x = self.fc2(x)
         if x.ndim == 3:
-            x = x.mean(dim=1)
+            x = masked_mean(x, mask)
         return x
 
 
