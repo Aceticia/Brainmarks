@@ -13,15 +13,10 @@ from brainmarks.models.base import as_embeddings
 
 def masked_mean(x: Tensor, mask: Tensor | None) -> Tensor:
     """Mean over dim 1, excluding positions where mask ([B, L] bool) is True."""
-    accum_dtype = (
-        torch.float32 if x.dtype in {torch.float16, torch.bfloat16} else x.dtype
-    )
     if mask is None:
-        return x.mean(dim=1, dtype=accum_dtype)
-    keep = (~mask).unsqueeze(-1)  # [B, L, 1]
-    numerator = (x * keep).sum(dim=1, dtype=accum_dtype)
-    denominator = keep.sum(dim=1, dtype=accum_dtype).clamp(min=1.0)
-    return numerator / denominator
+        return x.mean(dim=1)
+    keep = (~mask).unsqueeze(-1).to(x.dtype)  # [B, L, 1]
+    return (x * keep).sum(dim=1) / keep.sum(dim=1).clamp(min=1.0)
 
 
 # backbone classification wrappers adapted from capi

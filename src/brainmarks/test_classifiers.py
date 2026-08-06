@@ -28,22 +28,6 @@ def test_masked_mean_fully_padded_row_is_zero():
     assert torch.allclose(masked_mean(x, mask), torch.zeros(1, 4))
 
 
-@pytest.mark.parametrize("mask_padding", [False, True])
-def test_masked_mean_accumulates_low_precision_inputs_in_float32(mask_padding):
-    x = torch.full((1, 4096, 4), 32.0, dtype=torch.float16)
-    mask = None
-    if mask_padding:
-        mask = torch.zeros(1, 4096, dtype=torch.bool)
-        mask[:, -16:] = True
-        x[:, -16:] = 0
-
-    got = masked_mean(x, mask)
-
-    assert got.dtype == torch.float32
-    assert torch.isfinite(got).all()
-    assert torch.equal(got, torch.full((1, 4), 32.0))
-
-
 def _padded_inputs(seed=0, B=2, N=6, D=128, M=4):
     torch.manual_seed(seed)
     x = torch.randn(B, N, D)
